@@ -34,7 +34,7 @@ class Participant:
 
 @dataclass
 class Result:
-    exercise: int
+    exercise: int | str
     seed: int | None = None
     events: list[Event] = field(default_factory=list)
     participants: list[Participant] = field(default_factory=list)
@@ -46,6 +46,9 @@ class Result:
 
     def record(self, time: float, actor: str, kind: str, action: str) -> None:
         self.events.append(Event(float(time), actor, kind, action))
+
+    def extra_tables(self):
+        return ()
 
     def summary(self) -> dict:
         counts = {}

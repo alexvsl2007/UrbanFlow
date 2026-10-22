@@ -11,15 +11,18 @@ from .exercise03 import arrival_clock
 class Signal:
     """2 фазы. подписчики ждут Event, а не проверяют сигнал по таймеру"""
 
-    def __init__(self, env, result):
+    def __init__(self, env, result, green_duration=20, red_duration=10, name="traffic_light"):
         self.env = env
         self.result = result
+        self.green_duration = green_duration
+        self.red_duration = red_duration
+        self.name = name
         self.phase = "car"
         self.changed = env.event()
 
     def switch(self, phase):
         self.phase = phase
-        self.result.record(self.env.now, "traffic_light", "signal", phase)
+        self.result.record(self.env.now, self.name, "signal", phase)
         previous = self.changed
         self.changed = self.env.event()
         previous.succeed(phase)
@@ -27,14 +30,15 @@ class Signal:
     def car_time_left(self):
         # Вычисление по времени исключает зависимость от порядка событий
         # контроллера и автомобиля ровно на границе фазы
-        return max(0.0, 20 - self.env.now % 30)
+        cycle_duration = self.green_duration + self.red_duration
+        return max(0.0, self.green_duration - self.env.now % cycle_duration)
 
     def run(self):
         while True:
             self.switch("car")
-            yield self.env.timeout(20)
+            yield self.env.timeout(self.green_duration)
             self.switch("pedestrian")
-            yield self.env.timeout(10)
+            yield self.env.timeout(self.red_duration)
 
 
 class Crossing:
