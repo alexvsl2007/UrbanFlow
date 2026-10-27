@@ -143,6 +143,41 @@ class SequentialSegmentsTests(RoadRulesMixin, unittest.TestCase):
         self.assertEqual(cars(result)[0].arrived_at, 40)
         self.assert_complete_and_safe(result, exercise06a.SEGMENTS)
 
+    def test_car_starts_on_green_with_fractional_duration(self):
+        """Дробный цикл не должен задерживать автомобиль при включении зелёного."""
+        segments = tuple(
+            replace(segment, green_duration=20.1)
+            if segment.name == "A" else segment
+            for segment in exercise06a.SEGMENTS
+        )
+        result = exercise06a.run(
+            segments=segments,
+            car_arrivals=[150.5],
+            cars_at_crossing=True,
+            pedestrian_arrivals={},
+        )
+        visit = visits(result, "A")[0]
+        signal_events = [
+            event for event in result.events
+            if event.actor == "traffic_light:A" and 150.5 <= event.time <= 170.6
+        ]
+
+        print("\nA: green_duration=20.1 s, red_duration=10 s")
+        for event in signal_events:
+            print(f"SIGNAL A: t={event.time:g} s, phase={event.action}")
+        print(f"CAR A: queue_entered_at={visit.queue_entered_at:g} s")
+        print("EXPECTED crossing: 150.5 -> 152.5 s")
+        print(f"ACTUAL crossing:   {visit.crossing_started_at:g} -> "
+              f"{visit.crossing_finished_at:g} s")
+
+        self.assertTrue(any(
+            event.action == "car" and event.time == 150.5
+            for event in signal_events
+        ))
+        self.assertAlmostEqual(visit.queue_entered_at, 150.5)
+        self.assertAlmostEqual(visit.crossing_started_at, 150.5)
+        self.assertAlmostEqual(visit.crossing_finished_at, 152.5)
+
     def test_signals_are_independent_over_same_observation_interval(self):
         changed = tuple(replace(c, green_duration=30) if c.name == "B" else c
                         for c in exercise06a.SEGMENTS)
