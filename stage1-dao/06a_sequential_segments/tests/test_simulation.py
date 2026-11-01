@@ -70,6 +70,64 @@ class SequentialSegmentsTests(unittest.TestCase):
         self.assertEqual([car.finished_at for car in cars(result)], [40, 159])
         self.assert_drained(simulation, result)
 
+    def test_car_starts_on_green_with_fractional_duration(self):
+        """Дробный цикл не задерживает автомобиль при включении зелёного."""
+        simulation, result = run_simulation(
+            segment_parameters={
+                "A": replace(DEFAULT_SEGMENT_PARAMETERS["A"], green_duration=20.1),
+            },
+            car_arrivals=[150.5], pedestrian_arrivals={}, is_car_at_stop_line=True,
+        )
+        visit = cars(result)[0].visits["A"]
+        self.assertTrue(any(
+            change.segment_name == "A" and change.phase is LightPhase.VEHICLES
+            and abs(change.time - 150.5) < 1e-9
+            for change in result.phase_changes
+        ))
+        self.assertAlmostEqual(visit.queue_entered_at, 150.5)
+        self.assertAlmostEqual(visit.crossing_started_at, 150.5)
+        self.assertAlmostEqual(visit.crossing_finished_at, 152.5)
+        self.assert_drained(simulation, result)
+
+    def test_upstream_slot_is_held_until_crossing_finishes(self):
+        env = simpy.Environment()
+        simulation = SequentialSegmentsSimulation(
+            env=env, car_arrivals=[0], pedestrian_arrivals={},
+        )
+        snapshots = []
+
+        def observe():
+            for time in (21, 24):
+                yield env.timeout(time - env.now)
+                car = cars(simulation.journal)[0]
+                snapshots.append((
+                    car.current_segment.name,
+                    None if car.reserved_segment is None else car.reserved_segment.name,
+                    simulation.segments["B"].free_slots.level,
+                    simulation.segments["C"].free_slots.level,
+                ))
+
+        env.process(observe())
+        with redirect_stdout(io.StringIO()):
+            result = simulation.run()
+        self.assertEqual(snapshots, [("B", "C", 4, 2), ("C", None, 5, 2)])
+        self.assertEqual(cars(result)[0].visits["B"].crossing_finished_at, 23)
+        self.assert_drained(simulation, result)
+
+    def test_random_runs_are_reproducible(self):
+        def snapshot(result):
+            return (
+                result.finished_at, result.phase_changes,
+                [(p.id, p.kind, p.appeared_at, p.finished_at, p.visits)
+                 for p in result.participants],
+            )
+
+        for seed in (0, 7, 42):
+            with self.subTest(seed=seed):
+                _, first = run_simulation(seed=seed)
+                _, second = run_simulation(seed=seed)
+                self.assertEqual(snapshot(first), snapshot(second))
+
     def test_signals_and_arrival_streams_are_independent(self):
         _, baseline = run_simulation(horizon_ms=180)
         _, changed = run_simulation(
@@ -269,6 +327,31 @@ class SequentialSegmentsTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 with self.assertRaises(ValueError):
                     replace(DEFAULT_SEGMENT_PARAMETERS["B"], **changes)
+
+    def test_invalid_segment_parameters_are_rejected(self):
+        for changes in (
+            {"speed": 0}, {"approach_length": -1}, {"intersection_length": 0},
+            {"green_duration": float("nan")}, {"red_duration": float("inf")},
+            {"capacity": 0}, {"capacity": -1}, {"capacity": 1.5}, {"capacity": True},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                replace(DEFAULT_SEGMENT_PARAMETERS["B"], **changes)
+
+    def test_invalid_configs_and_schedules_are_rejected(self):
+        for kwargs in (
+            {"segment_parameters": {"D": DEFAULT_SEGMENT_PARAMETERS["A"]}},
+            {"segment_parameters": {"A": replace(DEFAULT_SEGMENT_PARAMETERS["A"], capacity=2)}},
+            {"segment_parameters": {"B": replace(DEFAULT_SEGMENT_PARAMETERS["B"], capacity=None)}},
+            {"segment_parameters": {"C": replace(DEFAULT_SEGMENT_PARAMETERS["C"], capacity=None)}},
+            {"pedestrian_arrivals": {"D": []}},
+            *({"horizon_ms": value} for value in (0, -1, float("nan"), float("inf"))),
+            *({"c_release_blocked_until": value} for value in (-1, float("nan"), float("inf"))),
+            *({"car_arrivals": [value]} for value in (-1, float("nan"), float("inf"))),
+            *({"pedestrian_arrivals": {"C": [value]}}
+              for value in (-1, float("nan"), float("inf"))),
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                SequentialSegmentsSimulation(env=simpy.Environment(), **kwargs)
 
 
 if __name__ == "__main__":
